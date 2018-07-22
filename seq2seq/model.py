@@ -1,19 +1,40 @@
 import os
-
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 import torch
 import torch.nn as nn
-from torch.optim import Adam
 import torch.nn.functional as F
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
-
-from utils import Vocabulary, reversed_basic_tokens
 from tqdm import tqdm
 
+from utils import Vocabulary, reversed_basic_tokens
+from configparser import ConfigParser
 
-GPU = None or torch.device('cuda:2')
-LR = 0.05
-BATCH_SIZE = 128
+config = ConfigParser()
+config.read(os.path.join(ROOT_DIR, "config.ini"))
+
+default_config = {
+    'epochs': config['DEFAULT'].getint('EPOCHS'),
+    'gpu': config['DEFAULT'].get('GPU', None),
+    'log_dir': config['DEFAULT'].get('LOG_DIR'),
+    'save_dir': config['DEFAULT'].get('SAVE_DIR')
+}
+
+vocab_config = {
+    'save': config['VOCABULARY'].getboolean('SAVE', fallback=True),
+    'load': config['VOCABULARY'].getboolean('LOAD', fallback=False),
+    'src_path': config['VOCABULARY'].get('SRC_PATH', fallback=None),
+    'trg_path': config['VOCABULARY'].get('TRG_PATH', fallback=None),
+    'vocab_size': config['VOCABULARY'].getint('SIZE')
+}
+
+model_config = {
+    'lr': config['MODEL'].getfloat('LR'),
+    'batch_size': config['MODEL'].getint('BATCH_SIZE'),
+    'input_size': config['MODEL'].getint('INPUT_SIZE'),
+    'hidden_size': config['MODEL'].getint('hidden_size'),
+    'num_layers': config['MODEL'].getint('NUM_LAYERS')
+}
 
 
 class SequenceDataset(Dataset):
@@ -71,17 +92,17 @@ class S2S(nn.Module):
 
     def forward(self, *inputs):
         src, src_len, trg, trg_len, *_ = inputs
-        sos_tokens = torch.full((trg.shape[0], 1), reversed_basic_tokens['<SOS>'], device=GPU)
-        trg = torch.cat([sos_tokens.type(torch.float32), trg.type(torch.float32)], dim=1).type(torch.long).cuda(device=GPU)
+        sos_tokens = torch.full((trg.shape[0], 1), reversed_basic_tokens['<SOS>'], device=default_config['gpu'])
+        trg = torch.cat([sos_tokens.type(torch.float32), trg.type(torch.float32)], dim=1).type(torch.long).cuda(device=default_config['gpu'])
         src_embed = self.src_embed(src).transpose(0, 1)
         trg_embed = self.trg_embed(trg).transpose(0, 1)
 
         # h_0, c_0 shape: (num_layers * num_directions, batch, hidden_size)
-        enc_h_0, enc_c_0 = [torch.zeros(self.num_layers, src_embed.shape[1], self.hidden_size, dtype=torch.float32, device=GPU) for i in range(2)]
+        enc_h_0, enc_c_0 = [torch.zeros(self.num_layers, src_embed.shape[1], self.hidden_size, dtype=torch.float32, device=default_config['gpu']) for i in range(2)]
         enc_output, (enc_h_t, enc_c_t) = self.encoder(src_embed, (enc_h_0, enc_c_0))
 
         dec_h_0 = enc_h_t
-        dec_c_0 = torch.zeros(self.num_layers, src_embed.shape[1], self.hidden_size, dtype=torch.float32, device=GPU)
+        dec_c_0 = torch.zeros(self.num_layers, src_embed.shape[1], self.hidden_size, dtype=torch.float32, device=default_config['gpu'])
         dec_output, (dec_h_t, dec_c_t) = self.decoder(trg_embed, (dec_h_0, dec_c_0))
         # dec_output.shape: seq_len, batch_size, hidden_size
         dec_output = dec_output[:-1, :, :]
@@ -91,9 +112,8 @@ class S2S(nn.Module):
 
 
 if __name__ == '__main__':
-    ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-    src_path = os.path.join(ROOT_DIR, "../datasets/30_length.en")
-    trg_path = os.path.join(ROOT_DIR, "../datasets/30_length.fr")
+    src_path = os.path.join(ROOT_DIR, "../datasets/30_train.en")
+    trg_path = os.path.join(ROOT_DIR, "../datasets/30_train.fr")
 
     with open(src_path, "rt") as src, open(trg_path, "rt") as trg:
         src_lines = [line.strip().split() for line in src.readlines()]
@@ -101,32 +121,42 @@ if __name__ == '__main__':
 
     tqdm.write("Total sentences: {:,}".format(len(src_lines)))
 
-    src_vocab = Vocabulary.build_vocabulary(corpus=src_lines, max_vocab_size=30000)
-    trg_vocab = Vocabulary.build_vocabulary(corpus=trg_lines, max_vocab_size=30000)
+    if vocab_config['load'] and vocab_config['src_path'] and vocab_config['trg_path']:
+        src_vocab = Vocabulary.load(os.path.join(ROOT_DIR, vocab_config['src_path']))
+        trg_vocab = Vocabulary.load(os.path.join(ROOT_DIR, vocab_config['trg_path']))
+    else:
+        src_vocab = Vocabulary.build_vocabulary(corpus=src_lines, max_vocab_size=vocab_config['vocab_size'])
+        trg_vocab = Vocabulary.build_vocabulary(corpus=trg_lines, max_vocab_size=vocab_config['vocab_size'])
+
+    if vocab_config['save']:
+        src_vocab.save(os.path.join(ROOT_DIR, vocab_config['src_path']))
+        trg_vocab.save(os.path.join(ROOT_DIR, vocab_config['trg_path']))
 
     datasets = SequenceDataset(src_lines, src_vocab, trg_lines, trg_vocab)
-    dataloader = DataLoader(datasets, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, collate_fn=collate_fn)
+    dataloader = DataLoader(datasets, batch_size=model_config['batch_size'], shuffle=False, num_workers=4, collate_fn=collate_fn)
 
-    model = S2S(src_vocab_size=30000, trg_vocab_size=30000, input_size=300, num_layers=1, hidden_size=300).cuda(device=GPU)
+    model = S2S(src_vocab_size=vocab_config['vocab_size'], trg_vocab_size=vocab_config['vocab_size'],
+                input_size=model_config['input_size'], num_layers=model_config['num_layers'], hidden_size=model_config['hidden_size']).cuda(device=default_config['gpu'])
 
     nllloss = nn.NLLLoss(size_average=False, ignore_index=reversed_basic_tokens['<PAD>'])
-    optimizer = Adam(model.parameters(), lr=LR)
-    with tqdm(total=len(src_lines), desc="Sent.") as pbar:
-        for step, (src_vec, src_len, trg_vec, trg_len) in enumerate(dataloader):
-            src_vec, trg_vec = src_vec.cuda(device=GPU), trg_vec.cuda(device=GPU)
+    optimizer = Adam(model.parameters(), lr=model_config['lr'])
+    for epoch in tqdm(range(default_config['epochs']), desc='EPOCH', leave=True):
+        with tqdm(total=len(src_lines), desc="Sent.", leave=False) as pbar:
+            for step, (src_vec, src_len, trg_vec, trg_len) in enumerate(dataloader):
+                src_vec, trg_vec = src_vec.cuda(device=default_config['gpu']), trg_vec.cuda(device=default_config['gpu'])
 
-            pbar.update(BATCH_SIZE)
-            optimizer.zero_grad()
+                pbar.update(model_config['batch_size'])
+                optimizer.zero_grad()
 
-            flatten_output = model(src_vec, src_len, trg_vec, trg_len)
-            logsoftmax_output = F.log_softmax(flatten_output, dim=1)
-            flatten_trg = trg_vec.reshape(-1)
+                flatten_output = model(src_vec, src_len, trg_vec, trg_len)
+                logsoftmax_output = F.log_softmax(flatten_output, dim=1)
+                flatten_trg = trg_vec.reshape(-1)
 
-            loss = nllloss(logsoftmax_output, flatten_trg)
-            loss /= src_vec.shape[0]
+                loss = nllloss(logsoftmax_output, flatten_trg)
+                loss /= src_vec.shape[0]
 
-            loss.backward()
-            optimizer.step()
+                loss.backward()
+                optimizer.step()
 
-            if step % 100 == 0:
-                tqdm.write("Step: {:,} Loss: {:,}".format(step, float(loss)))
+                if step % 100 == 0:
+                    tqdm.write("Step: {:,} Loss: {:,}".format(step, float(loss)))
