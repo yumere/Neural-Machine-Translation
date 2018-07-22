@@ -3,10 +3,10 @@ from collections import Counter
 from tqdm import tqdm
 
 basic_tokens = {
-    0: '<EOS>',
+    0: '<PAD>',
     1: '<UNK>',
     2: '<SOS>',
-    3: '<PAD>'
+    3: '<EOS>'
 }
 
 reversed_basic_tokens = dict(zip(basic_tokens.values(), basic_tokens.keys()))
