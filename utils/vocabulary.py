@@ -1,5 +1,5 @@
 from collections import Counter
-
+from mosestokenizer import MosesTokenizer
 from tqdm import tqdm
 
 basic_tokens = {
@@ -16,7 +16,8 @@ class Vocabulary(object):
     dictionary = basic_tokens
     reversed_dictionary = {}
 
-    def __init__(self, max_vocab_size=30000):
+    def __init__(self, lang='en', max_vocab_size=30000):
+        self.lang = lang
         self.max_vocab_size = max_vocab_size
 
     def to_vector(self, words):
@@ -36,16 +37,19 @@ class Vocabulary(object):
         return words
 
     @classmethod
-    def build_vocabulary(cls, corpus: list=None, file_path: str=None, max_vocab_size=30000):
-        vocab = cls(max_vocab_size)
+    def build_vocabulary(cls, corpus: list=None, file_path: str=None, max_vocab_size=30000, lang='en'):
+        vocab = cls(lang=lang, max_vocab_size=max_vocab_size)
         counter = Counter()
+
+        tokenizer = MosesTokenizer(lang=lang)
 
         if file_path is not None:
             with open(file_path, "rt") as f:
                 # TODO: Make preprocessor
-                corpus = [line.strip().split() for line in f.readlines()]
+                corpus = f.readlines()
 
-        for words in tqdm(corpus, desc="Build vocabulary"):
+        for sentence in tqdm(corpus, desc="Build vocabulary"):
+            words = tokenizer(sentence.strip())
             counter.update(words)
 
         for index, (k, v) in enumerate(counter.most_common(max_vocab_size - len(basic_tokens))):
