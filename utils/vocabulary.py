@@ -80,7 +80,7 @@ class Vocabulary(object):
             return self.dictionary[item]
         elif type(item) == str:
             if item not in self.reversed_dictionary:
-                return 2  # return UNK token
+                return self.reversed_dictionary['<UNK>']  # return UNK token
             return self.reversed_dictionary[item]
 
     def __setitem__(self, key, value):
