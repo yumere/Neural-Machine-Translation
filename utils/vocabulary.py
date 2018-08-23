@@ -1,6 +1,7 @@
 from collections import Counter
 from mosestokenizer import MosesTokenizer
 from tqdm import tqdm
+from _io import TextIOWrapper
 
 basic_tokens = {
     0: '<PAD>',
@@ -13,7 +14,7 @@ reversed_basic_tokens = dict(zip(basic_tokens.values(), basic_tokens.keys()))
 
 
 class Vocabulary(object):
-    dictionary = basic_tokens
+    dictionary = dict(basic_tokens)
     reversed_dictionary = {}
 
     def __init__(self, lang='en', max_vocab_size=30000):
@@ -59,10 +60,16 @@ class Vocabulary(object):
         return vocab
 
     def save(self, file_path):
-        with open(file_path, "wt") as f:
-            for k, v in self.dictionary.items():
-                # number, word
-                f.write("{} {}\n".format(k, v))
+        if isinstance(file_path, str):
+            with open(file_path, "wt") as f:
+                for k, v in self.dictionary.items():
+                    # number, word
+                    f.write("{} {}\n".format(k, v))
+
+        elif isinstance(file_path, TextIOWrapper):
+            with file_path as f:
+                for k, v in self.dictionary.items():
+                    f.write("{} {}\n".format(k, v))
 
     @classmethod
     def load(cls, file_path):
@@ -97,3 +104,19 @@ class Vocabulary(object):
 
     def __len__(self):
         return len(self.dictionary)
+
+
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('infile', type=argparse.FileType('rt', encoding="UTF-8"), help="The input file path")
+    parser.add_argument('outfile', type=argparse.FileType('wt', encoding="UTF-8"), help="The save file path")
+    parser.add_argument('lang', type=str, help="Language to be tokenized")
+    parser.add_argument('--max_vocab', type=int, help="The max vocabulary size")
+    args = parser.parse_args()
+
+    with args.infile as f:
+        corpus = f.readlines()
+    vocab = Vocabulary.build_vocabulary(corpus=corpus, max_vocab_size=args.max_vocab or 30000, lang=args.lang)
+    vocab.save(args.outfile)
