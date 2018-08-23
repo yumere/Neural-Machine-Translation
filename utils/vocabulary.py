@@ -1,7 +1,8 @@
+from _io import TextIOWrapper
 from collections import Counter
+
 from mosestokenizer import MosesTokenizer
 from tqdm import tqdm
-from _io import TextIOWrapper
 
 basic_tokens = {
     0: '<PAD>',
