@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from utils import Vocabulary, reversed_basic_tokens
 from configparser import ConfigParser
-from mosestokenizer import MosesTokenizer
+import argparse
 
 config = ConfigParser()
 config.read(os.path.join(ROOT_DIR, "config.ini"))
@@ -109,12 +109,10 @@ class S2S(nn.Module):
 def train():
     src_path = os.path.join(ROOT_DIR, "../datasets/30_length.en")
     trg_path = os.path.join(ROOT_DIR, "../datasets/30_length.fr")
-    en_tokenizer = MosesTokenizer('en')
-    fr_tokenizer = MosesTokenizer('fr')
 
     with open(src_path, "rt", encoding="utf8") as src, open(trg_path, "rt", encoding="utf8") as trg:
-        src_lines = [en_tokenizer(line.strip()) for line in src.readlines()]
-        trg_lines = [fr_tokenizer(line.strip()) for line in trg.readlines()]
+        src_lines = [line.strip().split(" ") for line in src.readlines()]
+        trg_lines = [line.strip().split(" ") for line in trg.readlines()]
 
     tqdm.write("Total sentences: {:,}".format(len(src_lines)))
 
@@ -130,7 +128,7 @@ def train():
         trg_vocab.save(os.path.join(ROOT_DIR, vocab_config['trg_path']))
 
     datasets = SequenceDataset(src_lines, src_vocab, trg_lines, trg_vocab)
-    dataloader = DataLoader(datasets, batch_size=model_config['batch_size'], shuffle=False, num_workers=1, collate_fn=collate_fn)
+    dataloader = DataLoader(datasets, batch_size=model_config['batch_size'], shuffle=True, num_workers=16, collate_fn=collate_fn)
 
     model = S2S(src_vocab_size=vocab_config['vocab_size'], trg_vocab_size=vocab_config['vocab_size'],
                 input_size=model_config['input_size'], num_layers=model_config['num_layers'],
@@ -162,48 +160,13 @@ def train():
 
                 if step % 100 == 0:
                     tqdm.write("Step: {:,} Loss: {:,}".format(step, float(loss)))
-        # torch.save(model.state_dict(), "{}_model.pt".format(epoch))
 
         # learning rate decay by 3 epoch
-        lr = model_config['lr'] * (0.1 ** (epoch // 3))
+        lr = model_config['lr'] * (0.1 ** (epoch // 10))
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
 
-def predict():
-    src_path = os.path.join(ROOT_DIR, "../datasets/30_train.en")
-    trg_path = os.path.join(ROOT_DIR, "../datasets/30_train.fr")
-
-    with open(src_path, "rt") as src, open(trg_path, "rt") as trg:
-        src_lines = [line.strip().split() for line in src.readlines()]
-        trg_lines = [line.strip().split() for line in trg.readlines()]
-
-    tqdm.write("Total sentences: {:,}".format(len(src_lines)))
-
-    if vocab_config['load'] and vocab_config['src_path'] and vocab_config['trg_path']:
-        src_vocab = Vocabulary.load(os.path.join(ROOT_DIR, vocab_config['src_path']))
-        trg_vocab = Vocabulary.load(os.path.join(ROOT_DIR, vocab_config['trg_path']))
-    else:
-        src_vocab = Vocabulary.build_vocabulary(corpus=src_lines, max_vocab_size=vocab_config['vocab_size'])
-        trg_vocab = Vocabulary.build_vocabulary(corpus=trg_lines, max_vocab_size=vocab_config['vocab_size'])
-
-    datasets = SequenceDataset(src_lines, src_vocab, trg_lines, trg_vocab)
-    dataloader = DataLoader(datasets, batch_size=model_config['batch_size'], shuffle=False, num_workers=4,
-                            collate_fn=collate_fn)
-
-    model = S2S(src_vocab_size=vocab_config['vocab_size'], trg_vocab_size=vocab_config['vocab_size'],
-                input_size=model_config['input_size'], num_layers=model_config['num_layers'],
-                hidden_size=model_config['hidden_size']).cuda(device=default_config['gpu'])
-    with tqdm(total=len(src_lines), desc="Sent.", leave=False) as pbar:
-        for step, (src_vec, src_len, trg_vec, trg_len) in enumerate(dataloader):
-            src_vec, trg_vec = src_vec.cuda(device=default_config['gpu']), trg_vec.cuda(device=default_config['gpu'])
-            pbar.update(model_config['batch_size'])
-            flatten_output = model(src_vec, src_len, trg_vec, trg_len)
-            logsoftmax_output = F.log_softmax(flatten_output, dim=1)
-            output = logsoftmax_output.argmax(dim=1).cpu().numpy()
-            output = np.split(output, model_config['batch_size'])
-
-
 if __name__ == '__main__':
     train()
-    # predict()
+
