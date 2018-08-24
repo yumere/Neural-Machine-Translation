@@ -29,3 +29,9 @@ Settings for Sutskever, Ilya, Oriol Vinyals, and Quoc V. Le. "[Sequence to seque
  # Experimental Results
  *To be added*
  
+ # TODO
+ - Reverse order of source language
+ - Decay learning rate based on the paper. Currently, I just halves learning rate after 5 epoch
+ - I must make model parallelizable because I don't have enough gpu memory to use 128 batch size
+ - Make prediction function
+ - Make BLEU score metric function
