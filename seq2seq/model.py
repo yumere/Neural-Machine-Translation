@@ -1,9 +1,7 @@
 import os
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
@@ -11,32 +9,6 @@ from tqdm import tqdm
 from utils import Vocabulary, reversed_basic_tokens
 from configparser import ConfigParser
 import argparse
-
-config = ConfigParser()
-config.read(os.path.join(ROOT_DIR, "config.ini"))
-
-default_config = {
-    'epochs': config['DEFAULT'].getint('EPOCHS'),
-    'gpu': config['DEFAULT'].get('GPU', None),
-    'log_dir': config['DEFAULT'].get('LOG_DIR'),
-    'save_dir': config['DEFAULT'].get('SAVE_DIR')
-}
-
-vocab_config = {
-    'save': config['VOCABULARY'].getboolean('SAVE', fallback=True),
-    'load': config['VOCABULARY'].getboolean('LOAD', fallback=False),
-    'src_path': config['VOCABULARY'].get('SRC_PATH', fallback=None),
-    'trg_path': config['VOCABULARY'].get('TRG_PATH', fallback=None),
-    'vocab_size': config['VOCABULARY'].getint('SIZE')
-}
-
-model_config = {
-    'lr': config['MODEL'].getfloat('LR'),
-    'batch_size': config['MODEL'].getint('BATCH_SIZE'),
-    'input_size': config['MODEL'].getint('INPUT_SIZE'),
-    'hidden_size': config['MODEL'].getint('hidden_size'),
-    'num_layers': config['MODEL'].getint('NUM_LAYERS')
-}
 
 
 class SequenceDataset(Dataset):
@@ -106,7 +78,11 @@ class S2S(nn.Module):
         return output
 
 
-def train():
+def train(args, config):
+    device = torch.device("cuda:{}".format(args.cuda) if args.cuda else 'cpu')
+    source_language = args.source_file.name.split(".")[-1]
+    target_language = args.target_file.name.split(".")[-1]
+
     src_path = os.path.join(ROOT_DIR, "../datasets/30_length.en")
     trg_path = os.path.join(ROOT_DIR, "../datasets/30_length.fr")
 
@@ -116,37 +92,40 @@ def train():
 
     tqdm.write("Total sentences: {:,}".format(len(src_lines)))
 
-    if vocab_config['load'] and vocab_config['src_path'] and vocab_config['trg_path']:
-        src_vocab = Vocabulary.load(os.path.join(ROOT_DIR, vocab_config['src_path']))
-        trg_vocab = Vocabulary.load(os.path.join(ROOT_DIR, vocab_config['trg_path']))
+    # Load vocabulary
+    if args.source_vocab and args.target_vocab:
+        src_vocab = Vocabulary.load(args.source_vocab)
+        trg_vocab = Vocabulary.load(args.target_vocab)
+    # If not exist, build vocabulary from input files
     else:
-        src_vocab = Vocabulary.build_vocabulary(corpus=src_lines, max_vocab_size=vocab_config['vocab_size'])
-        trg_vocab = Vocabulary.build_vocabulary(corpus=trg_lines, max_vocab_size=vocab_config['vocab_size'])
+        src_vocab = Vocabulary.build_vocabulary(corpus=src_lines, max_vocab_size=args.vocab_size, lang=source_language)
+        trg_vocab = Vocabulary.build_vocabulary(corpus=trg_lines, max_vocab_size=args.vocab_size, lang=target_language)
 
-    if vocab_config['save']:
-        src_vocab.save(os.path.join(ROOT_DIR, vocab_config['src_path']))
-        trg_vocab.save(os.path.join(ROOT_DIR, vocab_config['trg_path']))
+        # If log_dir exists, save vocabulary
+        if args.log_dir:
+            src_vocab.save(os.path.join(ROOT_DIR, args.log_dir, "{}.{}".format(len(src_vocab), source_language)))
+            trg_vocab.save(os.path.join(ROOT_DIR, args.log_dir, "{}.{}".format(len(trg_vocab), target_language)))
 
     datasets = SequenceDataset(src_lines, src_vocab, trg_lines, trg_vocab)
-    dataloader = DataLoader(datasets, batch_size=model_config['batch_size'], shuffle=True, num_workers=16, collate_fn=collate_fn)
+    dataloader = DataLoader(datasets, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
 
-    model = S2S(src_vocab_size=vocab_config['vocab_size'], trg_vocab_size=vocab_config['vocab_size'],
-                input_size=model_config['input_size'], num_layers=model_config['num_layers'],
-                hidden_size=model_config['hidden_size']).cuda(device=default_config['gpu'])
+    model = S2S(src_vocab_size=len(src_vocab), trg_vocab_size=len(trg_vocab),
+                input_size=config['embedding_size'], num_layers=config['num_layers'],
+                hidden_size=config['hidden_size']).cuda(device=device)
 
     criterion = nn.CrossEntropyLoss(ignore_index=reversed_basic_tokens['<PAD>'], reduction='sum')
-    optimizer = Adam(model.parameters(), lr=model_config['lr'])
-    for epoch in tqdm(range(default_config['epochs']), desc='EPOCH', leave=True):
+    optimizer = Adam(model.parameters(), lr=args.learning_rate)
+    for epoch in tqdm(range(args.epoch), desc='EPOCH', leave=True):
         with tqdm(total=len(src_lines), desc="Sent.", leave=False) as pbar:
             for step, (src_vec, src_len, trg_vec, trg_len) in enumerate(dataloader):
-                states = [torch.zeros(model_config['num_layers'], len(src_vec), model_config['hidden_size']).cuda(device=default_config['gpu']) for i in range(2)]
-                src_vec = torch.tensor(src_vec, dtype=torch.long).cuda(device=default_config['gpu'])
+                states = [torch.zeros(config['num_layers'], len(src_vec), config['hidden_size']).cuda(device=device) for i in range(2)]
+                src_vec = torch.tensor(src_vec, dtype=torch.long).cuda(device=device)
 
                 trg_input = [[trg_vocab['<SOS>']] + vec for vec in trg_vec]
-                trg_vec = torch.tensor(trg_vec, dtype=torch.long).cuda(device=default_config['gpu'])
-                trg_input = torch.tensor(trg_input, dtype=torch.long).cuda(device=default_config['gpu'])
+                trg_vec = torch.tensor(trg_vec, dtype=torch.long).cuda(device=device)
+                trg_input = torch.tensor(trg_input, dtype=torch.long).cuda(device=device)
 
-                pbar.update(model_config['batch_size'])
+                pbar.update(args.batch_size)
                 optimizer.zero_grad()
 
                 flatten_output = model(src_vec, src_len, trg_input, trg_len, states)
@@ -161,12 +140,40 @@ def train():
                 if step % 100 == 0:
                     tqdm.write("Step: {:,} Loss: {:,}".format(step, float(loss)))
 
-        # learning rate decay by 3 epoch
-        lr = model_config['lr'] * (0.1 ** (epoch // 10))
+        # learning rate decay by epoch
+        lr = args.learning_rate * (0.1 ** (epoch // args.decay))
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
 
 if __name__ == '__main__':
-    train()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('source_file', type=argparse.FileType('rt', encoding="UTF-8"), help="The source language file")
+    parser.add_argument('target_file', type=argparse.FileType('rt', encoding="UTF-8"), help="The target language file")
+    parser.add_argument('--source-vocab', type=str, help="source language vocabulary")
+    parser.add_argument('--target-vocab', type=str, help="target language vocabulary")
+    parser.add_argument('--log_dir', type=str, help="log directory")
+    parser.add_argument('--cuda', type=int, default=None, help="GPU number (default: None)")
+
+    parser.add_argument('--vocab_size', type=int, metavar='30000', default=30000, help="Vocabulary size")
+    parser.add_argument('--num_workers', type=int, metavar='16', default=16, help="Num workers for dataloader")
+    parser.add_argument('--batch-size', type=int, metavar='256', default=256, help="The number of mini batch")
+    parser.add_argument('--epoch', type=int, metavar='10', default=10, help="The number of epochs")
+    parser.add_argument("-lr", "--learning_rate", type=float, metavar='0.0002', default=0.0002, help="The learning rate")
+    parser.add_argument("--decay", type=int, metavar='10', default=10, help="How often update learning rate")
+
+    parser.add_argument("-c", "--config", type=str, required=True, help="The configuration file")
+    parser.add_argument('-r', '--resume', type=str, default=None, help="path to the latest checkpoint (default: None)")
+
+    args = parser.parse_args()
+    config = ConfigParser()
+    config.read(args.config)
+
+    model_config = {
+        'embedding_size': config['MODEL'].getint('embedding_size'),
+        'hidden_size': config['MODEL'].getint('hidden_size'),
+        'num_layers': config['MODEL'].getint('num_layers')
+    }
+
+    train(args, model_config)
 
