@@ -7,6 +7,7 @@ from torch.nn.utils import clip_grad_norm_
 import torch.nn.init as init
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+import json
 
 from utils import Vocabulary, reversed_basic_tokens
 from configparser import ConfigParser
@@ -119,15 +120,15 @@ def train(args, config):
     dataloader = DataLoader(datasets, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
 
     model = S2S(src_vocab_size=len(src_vocab), trg_vocab_size=len(trg_vocab),
-                input_size=config['embedding_size'], num_layers=config['num_layers'],
-                hidden_size=config['hidden_size']).cuda(device=device)
+                input_size=config["MODEL"]['embedding_size'], num_layers=config["MODEL"]['num_layers'],
+                hidden_size=config["MODEL"]['hidden_size']).cuda(device=device)
 
     criterion = nn.CrossEntropyLoss(ignore_index=reversed_basic_tokens['<PAD>'], reduction='sum')
     optimizer = Adam(model.parameters(), lr=args.learning_rate)
     for epoch in tqdm(range(args.epoch), desc='EPOCH', leave=True):
         with tqdm(total=len(src_lines), desc="Sent.", leave=False) as pbar:
             for step, (src_vec, src_len, trg_vec, trg_len) in enumerate(dataloader):
-                states = [torch.zeros(config['num_layers'], len(src_vec), config['hidden_size']).cuda(device=device) for i in range(2)]
+                states = [torch.zeros(config["MODEL"]['num_layers'], len(src_vec), config["MODEL"]['hidden_size']).cuda(device=device) for i in range(2)]
                 src_vec = torch.tensor(src_vec, dtype=torch.long).cuda(device=device)
 
                 trg_input = [[trg_vocab['<SOS>']] + vec for vec in trg_vec]
@@ -176,14 +177,7 @@ if __name__ == '__main__':
     parser.add_argument('-r', '--resume', type=str, default=None, help="path to the latest checkpoint (default: None)")
 
     args = parser.parse_args()
-    config = ConfigParser()
-    config.read(args.config)
+    config = json.load(open(os.path.join(ROOT_DIR, "config.json"), "rt", encoding="utf8"))
 
-    model_config = {
-        'embedding_size': config['MODEL'].getint('embedding_size'),
-        'hidden_size': config['MODEL'].getint('hidden_size'),
-        'num_layers': config['MODEL'].getint('num_layers')
-    }
-
-    train(args, model_config)
+    train(args, config)
 
