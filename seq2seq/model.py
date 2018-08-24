@@ -3,6 +3,8 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 import torch
 import torch.nn as nn
 from torch.optim import Adam
+from torch.nn.utils import clip_grad_norm_
+import torch.nn.init as init
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
@@ -64,6 +66,8 @@ class S2S(nn.Module):
         self.decoder = nn.LSTM(input_size, hidden_size, num_layers)
         self.linear = nn.Linear(hidden_size, trg_vocab_size)
 
+        self._initialize_lstm()
+
     def forward(self, *inputs):
         src, src_len, trg, trg_len, states = inputs
         src_embed = self.src_embed(src).transpose(0, 1)
@@ -76,6 +80,11 @@ class S2S(nn.Module):
         flatten_output = dec_output.reshape(-1, self.hidden_size)
         output = self.linear(flatten_output)
         return output
+
+    def _initialize_lstm(self):
+        for name, params in self.encoder.named_parameters():
+            if name.startswith("weight"):
+                init.uniform_(params, -0.08, 0.08)
 
 
 def train(args, config):
@@ -134,16 +143,17 @@ def train(args, config):
                 loss = criterion(flatten_output, flatten_trg)
                 loss /= src_vec.shape[0]
                 loss.backward()
-
+                clip_grad_norm_(model.parameters(), 5.0)
                 optimizer.step()
 
                 if step % 100 == 0:
                     tqdm.write("Step: {:,} Loss: {:,}".format(step, float(loss)))
 
         # learning rate decay by epoch
-        lr = args.learning_rate * (0.1 ** (epoch // args.decay))
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
+        if epoch >= 5:
+            lr = args.learning_rate * 0.5 ** (epoch-4)
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
 
 
 if __name__ == '__main__':
