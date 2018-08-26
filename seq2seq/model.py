@@ -2,7 +2,7 @@ import os
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 import torch
 import torch.nn as nn
-from torch.optim import Adam
+import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 import torch.nn.init as init
 from torch.utils.data import Dataset, DataLoader
@@ -10,7 +10,6 @@ from tqdm import tqdm
 import json
 
 from utils import Vocabulary, reversed_basic_tokens
-from configparser import ConfigParser
 import argparse
 
 
@@ -88,13 +87,23 @@ class S2S(nn.Module):
                 init.uniform_(params, -0.08, 0.08)
 
 
-def train(args, config):
-    device = torch.device("cuda:{}".format(args.cuda) if args.cuda else 'cpu')
-    source_language = args.source_file.name.split(".")[-1]
-    target_language = args.target_file.name.split(".")[-1]
+def load_checkpoint(filename: str, model: nn.Module, optimizer: optim.Optimizer):
+    if os.path.isfile(os.path.join(ROOT_DIR, filename)):
+        checkpoint = torch.load(os.path.join(ROOT_DIR, filename))
+        start_epoch = checkpoint['epoch']
+        model.load_state_dict(checkpoint['state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
 
-    src_path = os.path.join(ROOT_DIR, "../datasets/30_length.en")
-    trg_path = os.path.join(ROOT_DIR, "../datasets/30_length.fr")
+        return start_epoch, model, optim
+
+
+def train(args, config, resume: bool or str=False):
+    device = torch.device("cuda:{}".format(args.cuda) if args.cuda else 'cpu')
+    source_language = args.source_file.split(".")[-1]
+    target_language = args.target_file.split(".")[-1]
+
+    src_path = os.path.join(ROOT_DIR, args.source_file)
+    trg_path = os.path.join(ROOT_DIR, args.target_file)
 
     with open(src_path, "rt", encoding="utf8") as src, open(trg_path, "rt", encoding="utf8") as trg:
         src_lines = [line.strip().split(" ") for line in src.readlines()]
@@ -121,22 +130,29 @@ def train(args, config):
 
     model = S2S(src_vocab_size=len(src_vocab), trg_vocab_size=len(trg_vocab),
                 input_size=config["MODEL"]['embedding_size'], num_layers=config["MODEL"]['num_layers'],
-                hidden_size=config["MODEL"]['hidden_size']).cuda(device=device)
+                hidden_size=config["MODEL"]['hidden_size']).to(device=device)
 
     criterion = nn.CrossEntropyLoss(ignore_index=reversed_basic_tokens['<PAD>'], reduction='sum')
-    optimizer = Adam(model.parameters(), lr=args.learning_rate)
-    for epoch in tqdm(range(args.epoch), desc='EPOCH', leave=True):
+    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate)
+
+    # Load epochs
+    start_epoch = 0
+    if resume:
+        start_epoch, model, optimizer = load_checkpoint(resume, model, optimizer)
+
+    epochs = range(start_epoch, args.epoch)
+    for epoch in tqdm(epochs, desc='EPOCH', leave=True):
         with tqdm(total=len(src_lines), desc="Sent.", leave=False) as pbar:
             for step, (src_vec, src_len, trg_vec, trg_len) in enumerate(dataloader):
-                states = [torch.zeros(config["MODEL"]['num_layers'], len(src_vec), config["MODEL"]['hidden_size']).cuda(device=device) for i in range(2)]
-                src_vec = torch.tensor(src_vec, dtype=torch.long).cuda(device=device)
+                states = [torch.zeros(config["MODEL"]['num_layers'], len(src_vec), config["MODEL"]['hidden_size']).to(device=device) for i in range(2)]
+                src_vec = torch.tensor(src_vec, dtype=torch.long).to(device=device)
 
                 trg_input = [[trg_vocab['<SOS>']] + vec for vec in trg_vec]
-                trg_vec = torch.tensor(trg_vec, dtype=torch.long).cuda(device=device)
-                trg_input = torch.tensor(trg_input, dtype=torch.long).cuda(device=device)
+                trg_vec = torch.tensor(trg_vec, dtype=torch.long).to(device=device)
+                trg_input = torch.tensor(trg_input, dtype=torch.long).to(device=device)
 
                 pbar.update(args.batch_size)
-                optimizer.zero_grad()
+                model.zero_grad()
 
                 flatten_output = model(src_vec, src_len, trg_input, trg_len, states)
                 flatten_trg = trg_vec.reshape(-1)
@@ -150,17 +166,30 @@ def train(args, config):
                 if step % 100 == 0:
                     tqdm.write("Step: {:,} Loss: {:,}".format(step, float(loss)))
 
+                    if args.log_dir is not None:
+                        path = os.path.join(ROOT_DIR, args.log_dir)
+                        if not os.path.exists(path):
+                            os.makedirs(path)
+
+                        state = {
+                            'epoch': epoch,
+                            'state_dict': model.state_dict(),
+                            'optimizer': optimizer.state_dict()
+                        }
+                        torch.save(state, os.path.join(path, "{}.ckpt".format(epoch)))
+                        tqdm.write("[+]{}.ckpt saved".format(epoch))
+
         # learning rate decay by epoch
         if epoch >= 5:
-            lr = args.learning_rate * 0.5 ** (epoch-4)
+            lr = args.learning_rate * (0.5 ** (epoch-4))
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('source_file', type=argparse.FileType('rt', encoding="UTF-8"), help="The source language file")
-    parser.add_argument('target_file', type=argparse.FileType('rt', encoding="UTF-8"), help="The target language file")
+    parser.add_argument('source_file', type=str, help="The source language file")
+    parser.add_argument('target_file', type=str, help="The target language file")
     parser.add_argument('--source-vocab', type=str, help="source language vocabulary")
     parser.add_argument('--target-vocab', type=str, help="target language vocabulary")
     parser.add_argument('--log_dir', type=str, help="log directory")
@@ -179,5 +208,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
     config = json.load(open(os.path.join(ROOT_DIR, "config.json"), "rt", encoding="utf8"))
 
-    train(args, config)
+    train(args, config, args.resume)
 
