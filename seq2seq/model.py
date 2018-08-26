@@ -8,6 +8,8 @@ import torch.nn.init as init
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import json
+from itertools import chain
+
 
 from utils import Vocabulary, reversed_basic_tokens
 from utils import load_checkpoint
@@ -83,7 +85,7 @@ class S2S(nn.Module):
         return output
 
     def _initialize_lstm(self):
-        for name, params in self.encoder.named_parameters():
+        for name, params in chain(self.encoder.named_parameters(), self.decoder.named_parameters()):
             if name.startswith("weight"):
                 init.uniform_(params, -0.08, 0.08)
 
