@@ -164,7 +164,7 @@ if __name__ == '__main__':
     parser.add_argument('--source-vocab', type=str, help="source language vocabulary")
     parser.add_argument('--target-vocab', type=str, help="target language vocabulary")
     parser.add_argument('--log_dir', type=str, help="log directory")
-    parser.add_argument('--cuda', type=int, default=None, help="GPU number (default: None)")
+    parser.add_argument('--cuda', type=str, default=None, help="GPU number (default: None)")
 
     parser.add_argument('--vocab_size', type=int, metavar='30000', default=30000, help="Vocabulary size")
     parser.add_argument('--num_workers', type=int, metavar='16', default=16, help="Num workers for dataloader")
