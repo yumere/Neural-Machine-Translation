@@ -10,6 +10,7 @@ from tqdm import tqdm
 import json
 
 from utils import Vocabulary, reversed_basic_tokens
+from utils import load_checkpoint
 import argparse
 
 
@@ -87,16 +88,6 @@ class S2S(nn.Module):
                 init.uniform_(params, -0.08, 0.08)
 
 
-def load_checkpoint(filename: str, model: nn.Module, optimizer: optim.Optimizer):
-    if os.path.isfile(os.path.join(ROOT_DIR, filename)):
-        checkpoint = torch.load(os.path.join(ROOT_DIR, filename))
-        start_epoch = checkpoint['epoch']
-        model.load_state_dict(checkpoint['state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-
-        return start_epoch, model, optim
-
-
 def train(args, config, resume: bool or str=False):
     device = torch.device("cuda:{}".format(args.cuda) if args.cuda else 'cpu')
     source_language = args.source_file.split(".")[-1]
@@ -138,10 +129,15 @@ def train(args, config, resume: bool or str=False):
     # Load epochs
     start_epoch = 0
     if resume:
-        start_epoch, model, optimizer = load_checkpoint(resume, model, optimizer)
+        start_epoch, model, optimizer = load_checkpoint(os.path.join(ROOT_DIR, resume), model, optimizer)
 
     epochs = range(start_epoch, args.epoch)
     for epoch in tqdm(epochs, desc='EPOCH', leave=True):
+        # Decay learning rate
+        lr = args.learning_rate * (0.5 ** (epoch))
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
+
         with tqdm(total=len(src_lines), desc="Sent.", leave=False) as pbar:
             for step, (src_vec, src_len, trg_vec, trg_len) in enumerate(dataloader):
                 states = [torch.zeros(config["MODEL"]['num_layers'], len(src_vec), config["MODEL"]['hidden_size']).to(device=device) for i in range(2)]
@@ -166,24 +162,18 @@ def train(args, config, resume: bool or str=False):
                 if step % 100 == 0:
                     tqdm.write("Step: {:,} Loss: {:,}".format(step, float(loss)))
 
-                    if args.log_dir is not None:
-                        path = os.path.join(ROOT_DIR, args.log_dir)
-                        if not os.path.exists(path):
-                            os.makedirs(path)
+        if args.log_dir is not None:
+            path = os.path.join(ROOT_DIR, args.log_dir)
+            if not os.path.exists(path):
+                os.makedirs(path)
 
-                        state = {
-                            'epoch': epoch,
-                            'state_dict': model.state_dict(),
-                            'optimizer': optimizer.state_dict()
-                        }
-                        torch.save(state, os.path.join(path, "{}.ckpt".format(epoch)))
-                        tqdm.write("[+]{}.ckpt saved".format(epoch))
-
-        # learning rate decay by epoch
-        if epoch >= 5:
-            lr = args.learning_rate * (0.5 ** (epoch-4))
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
+            state = {
+                'epoch': epoch,
+                'state_dict': model.state_dict(),
+                'optimizer': optimizer.state_dict()
+            }
+            torch.save(state, os.path.join(path, "{}.ckpt".format(epoch)))
+            tqdm.write("[+] {}.ckpt saved".format(epoch))
 
 
 if __name__ == '__main__':
