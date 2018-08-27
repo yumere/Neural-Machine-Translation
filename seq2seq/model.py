@@ -12,7 +12,7 @@ import json
 from itertools import chain
 
 
-from utils import Vocabulary, reversed_basic_tokens
+from utils import Vocabulary
 from utils import load_checkpoint
 import argparse
 
@@ -50,8 +50,8 @@ def collate_fn(data):
     src, src_len, trg, trg_len = zip(*data)
     src_max_len, trg_max_len = max(src_len), max(trg_len)
     for s, t in zip(src, trg):
-        s += [reversed_basic_tokens['<PAD>']] * (src_max_len - len(s))
-        t += [reversed_basic_tokens['<PAD>']] * (trg_max_len - len(t))
+        s += [Vocabulary.reversed_basic_tokens['<PAD>']] * (src_max_len - len(s))
+        t += [Vocabulary.reversed_basic_tokens['<PAD>']] * (trg_max_len - len(t))
 
     return src, src_len, trg, trg_len
 
@@ -63,8 +63,8 @@ class S2S(nn.Module):
         self.num_layers = num_layers
         self.hidden_size = hidden_size
 
-        self.src_embed = nn.Embedding(src_vocab_size, input_size, padding_idx=reversed_basic_tokens['<PAD>'])
-        self.trg_embed = nn.Embedding(trg_vocab_size, input_size, padding_idx=reversed_basic_tokens['<PAD>'])
+        self.src_embed = nn.Embedding(src_vocab_size, input_size, padding_idx=Vocabulary.reversed_basic_tokens['<PAD>'])
+        self.trg_embed = nn.Embedding(trg_vocab_size, input_size, padding_idx=Vocabulary.reversed_basic_tokens['<PAD>'])
 
         self.encoder = nn.LSTM(input_size, hidden_size, num_layers)
         self.decoder = nn.LSTM(input_size, hidden_size, num_layers)
@@ -126,7 +126,7 @@ def train(args, config, resume: bool or str=False):
                 input_size=config["MODEL"]['embedding_size'], num_layers=config["MODEL"]['num_layers'],
                 hidden_size=config["MODEL"]['hidden_size']).to(device=device)
 
-    criterion = nn.CrossEntropyLoss(ignore_index=reversed_basic_tokens['<PAD>'], reduction='sum')
+    criterion = nn.CrossEntropyLoss(ignore_index=Vocabulary.reversed_basic_tokens['<PAD>'], reduction='sum')
     optimizer = optim.SGD(model.parameters(), lr=args.learning_rate)
 
     # Load epochs
