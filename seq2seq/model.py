@@ -79,7 +79,7 @@ class S2S(nn.Module):
 
         enc_output, states_t = self.encoder(src_embed, states)
         dec_output, states_t = self.decoder(trg_embed, states_t)
-        dec_output = dec_output[:-1, :, :]
+        dec_output = dec_output[:-1, :, :].transpose(0, 1)
 
         flatten_output = dec_output.reshape(-1, self.hidden_size)
         output = self.linear(flatten_output)
