@@ -4,21 +4,19 @@ from collections import Counter
 from mosestokenizer import MosesTokenizer
 from tqdm import tqdm
 
-basic_tokens = {
-    0: '<PAD>',
-    1: '<UNK>',
-    2: '<SOS>',
-    3: '<EOS>'
-}
-
-reversed_basic_tokens = dict(zip(basic_tokens.values(), basic_tokens.keys()))
-
 
 class Vocabulary(object):
-    dictionary = dict(basic_tokens)
-    reversed_dictionary = {}
+    basic_tokens = {
+        0: '<PAD>',
+        1: '<UNK>',
+        2: '<SOS>',
+        3: '<EOS>'
+    }
+    reversed_basic_tokens = dict(zip(basic_tokens.values(), basic_tokens.keys()))
 
     def __init__(self, lang='en', max_vocab_size=30000):
+        self.dictionary = dict(Vocabulary.basic_tokens)
+        self.reversed_dictionary = {}
         self.lang = lang
         self.max_vocab_size = max_vocab_size
 
@@ -28,12 +26,10 @@ class Vocabulary(object):
             vector.append(self[w])
         return vector
 
-    def to_string(self, vector_list, remove_pad=True):
+    def to_string(self, vector_list):
         words = []
         for v in vector_list:
             v = int(v)
-            if remove_pad and v == 0 or v == 1 or v == 3:
-                continue
             words.append(self[v])
 
         return words
