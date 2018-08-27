@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 import torch.nn.init as init
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import json
@@ -178,6 +179,65 @@ def train(args, config, resume: bool or str=False):
             tqdm.write("[+] {}.ckpt saved".format(epoch))
 
 
+def test(args, config, resume=False):
+    device = torch.device("cuda:{}".format(args.cuda) if args.cuda else 'cpu')
+    source_language = args.source_file.split(".")[-1]
+    target_language = args.target_file.split(".")[-1]
+
+    src_path = os.path.join(ROOT_DIR, args.source_file)
+    trg_path = os.path.join(ROOT_DIR, args.target_file)
+
+    with open(src_path, "rt", encoding="utf8") as src, open(trg_path, "rt", encoding="utf8") as trg:
+        src_lines = [line.strip().split(" ") for line in src.readlines()]
+        trg_lines = [line.strip().split(" ") for line in trg.readlines()]
+
+    tqdm.write("Total sentences: {:,}".format(len(src_lines)))
+
+    # Load vocabulary
+    if args.source_vocab and args.target_vocab:
+        src_vocab = Vocabulary.load(args.source_vocab)
+        trg_vocab = Vocabulary.load(args.target_vocab)
+    # If not exist, build vocabulary from input files
+    else:
+        src_vocab = Vocabulary.build_vocabulary(corpus=src_lines, max_vocab_size=args.vocab_size, lang=source_language)
+        trg_vocab = Vocabulary.build_vocabulary(corpus=trg_lines, max_vocab_size=args.vocab_size, lang=target_language)
+
+        # If log_dir exists, save vocabulary
+        if args.log_dir:
+            src_vocab.save(os.path.join(ROOT_DIR, args.log_dir, "{}.{}".format(len(src_vocab), source_language)))
+            trg_vocab.save(os.path.join(ROOT_DIR, args.log_dir, "{}.{}".format(len(trg_vocab), target_language)))
+
+    datasets = SequenceDataset(src_lines, src_vocab, trg_lines, trg_vocab)
+    dataloader = DataLoader(datasets, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
+
+    model = S2S(src_vocab_size=len(src_vocab), trg_vocab_size=len(trg_vocab),
+                input_size=config["MODEL"]['embedding_size'], num_layers=config["MODEL"]['num_layers'],
+                hidden_size=config["MODEL"]['hidden_size']).to(device=device)
+
+    with tqdm(total=len(src_lines), desc="Sentences") as pbar:
+        for step, (src_vec, src_len, trg_vec, trg_len) in enumerate(dataloader):
+            states = [torch.zeros(config["MODEL"]['num_layers'], len(src_vec), config["MODEL"]['hidden_size']).to(
+                device=device) for i in range(2)]
+            src_vec = torch.tensor(src_vec, dtype=torch.long).to(device=device)
+
+            trg_input = [[trg_vocab['<SOS>']] + vec for vec in trg_vec]
+            trg_vec = torch.tensor(trg_vec, dtype=torch.long).to(device=device)
+            trg_input = torch.tensor(trg_input, dtype=torch.long).to(device=device)
+
+            pbar.update(args.batch_size)
+
+            flatten_output = model(src_vec, src_len, trg_input, trg_len, states)
+            output = F.softmax(flatten_output, dim=1).argmax(dim=1).reshape(-1, trg_vec.shape[0]).transpose(0, 1)
+
+            for s, t, o in zip(src_vec.tolist(), trg_vec.tolist(), output.tolist()):
+                tqdm.write("Source: {}".format(" ".join(src_vocab.to_string(s))))
+                tqdm.write("Target :{}".format(" ".join(trg_vocab.to_string(t))))
+                tqdm.write("Output: {}".format(" ".join(trg_vocab.to_string(o))))
+                tqdm.write("\n")
+                break
+            break
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('source_file', type=str, help="The source language file")
@@ -200,5 +260,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     config = json.load(open(os.path.join(ROOT_DIR, "config.json"), "rt", encoding="utf8"))
 
-    train(args, config, args.resume)
+    # train(args, config, args.resume)
+    test(args, config, args.resume)
 
