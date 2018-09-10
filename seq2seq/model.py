@@ -120,14 +120,14 @@ def train(args, config, resume: bool or str=False):
             trg_vocab.save(os.path.join(ROOT_DIR, args.log_dir, "{}.{}".format(len(trg_vocab), target_language)))
 
     datasets = SequenceDataset(src_lines, src_vocab, trg_lines, trg_vocab)
-    dataloader = DataLoader(datasets, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
+    dataloader = DataLoader(datasets, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn, drop_last=True)
 
     model = S2S(src_vocab_size=len(src_vocab), trg_vocab_size=len(trg_vocab),
                 input_size=config["MODEL"]['embedding_size'], num_layers=config["MODEL"]['num_layers'],
                 hidden_size=config["MODEL"]['hidden_size']).to(device=device)
 
     criterion = nn.CrossEntropyLoss(ignore_index=Vocabulary.reversed_basic_tokens['<PAD>'], reduction='sum')
-    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate)
+    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 
     # Load epochs
     start_epoch = 0
@@ -135,18 +135,18 @@ def train(args, config, resume: bool or str=False):
         start_epoch, model, optimizer = load_checkpoint(os.path.join(ROOT_DIR, resume), model, optimizer)
 
     epochs = range(start_epoch, args.epoch)
+    states = [torch.zeros(config["MODEL"]['num_layers'], args.batch_size, config["MODEL"]['hidden_size']).to(device=device)for i in range(2)]
     for epoch in tqdm(epochs, desc='EPOCH', leave=True):
-        # Decay learning rate
-        lr = args.learning_rate * (0.5 ** (epoch))
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
-
-        with tqdm(total=len(src_lines), desc="Sent.", leave=False) as pbar:
+        with tqdm(total=len(src_lines), desc="Sents", leave=False) as pbar:
             for step, (src_vec, src_len, trg_vec, trg_len) in enumerate(dataloader):
-                states = [torch.zeros(config["MODEL"]['num_layers'], len(src_vec), config["MODEL"]['hidden_size']).to(device=device) for i in range(2)]
+                # For CUDA optimization, 10 iterations speed up
+                for state in states:
+                    state.zero_()
+
                 src_vec = torch.tensor(src_vec, dtype=torch.long).to(device=device)
 
                 trg_input = [[trg_vocab['<SOS>']] + vec for vec in trg_vec]
+                # For CUDA optimization, 1~2 iterations speed up
                 trg_vec = torch.tensor(trg_vec, dtype=torch.long).to(device=device)
                 trg_input = torch.tensor(trg_input, dtype=torch.long).to(device=device)
 
@@ -164,6 +164,12 @@ def train(args, config, resume: bool or str=False):
 
                 if step % 100 == 0:
                     tqdm.write("Step: {:,} Loss: {:,}".format(step, float(loss)))
+
+        # Decay learning rate
+        if epoch >= 1:
+            lr = args.learning_rate * (0.5 ** (epoch - 1))
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
 
         if args.log_dir is not None:
             path = os.path.join(ROOT_DIR, args.log_dir)
@@ -208,7 +214,7 @@ def test(args, config, resume=False):
             trg_vocab.save(os.path.join(ROOT_DIR, args.log_dir, "{}.{}".format(len(trg_vocab), target_language)))
 
     datasets = SequenceDataset(src_lines, src_vocab, trg_lines, trg_vocab)
-    dataloader = DataLoader(datasets, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
+    dataloader = DataLoader(datasets, batch_size=1, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn, drop_last=True)
 
     model = S2S(src_vocab_size=len(src_vocab), trg_vocab_size=len(trg_vocab),
                 input_size=config["MODEL"]['embedding_size'], num_layers=config["MODEL"]['num_layers'],
@@ -227,7 +233,7 @@ def test(args, config, resume=False):
             pbar.update(args.batch_size)
 
             flatten_output = model(src_vec, src_len, trg_input, trg_len, states)
-            output = F.softmax(flatten_output, dim=1).argmax(dim=1).reshape(-1, trg_vec.shape[0]).transpose(0, 1)
+            output = F.softmax(flatten_output, dim=1).argmax(dim=1).reshape(trg_vec.shape[0], -1)
 
             for s, t, o in zip(src_vec.tolist(), trg_vec.tolist(), output.tolist()):
                 tqdm.write("Source: {}".format(" ".join(src_vocab.to_string(s))))
@@ -260,6 +266,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     config = json.load(open(os.path.join(ROOT_DIR, "config.json"), "rt", encoding="utf8"))
 
-    # train(args, config, args.resume)
-    test(args, config, args.resume)
+    train(args, config, args.resume)
+    # test(args, config, args.resume)
 
